@@ -181,13 +181,19 @@
     if (!exJson.error){
       const points = exJson.dataPoints || [];
       const [y,m,d] = date.split("-").map(Number);
+      const civilDate = (interval) => {
+        if (!interval || !interval.startTime) return null;
+        const offsetSec = parseInt(interval.startUtcOffset || "0s", 10) || 0;
+        const dt = new Date(new Date(interval.startTime).getTime() + offsetSec*1000);
+        return { year: dt.getUTCFullYear(), month: dt.getUTCMonth()+1, day: dt.getUTCDate() };
+      };
       exercises = points.filter(p => {
-        const civ = p.exercise && p.exercise.interval && p.exercise.interval.civilStartTime && p.exercise.interval.civilStartTime.date;
+        const civ = civilDate(p.exercise && p.exercise.interval);
         return civ && civ.year === y && civ.month === m && civ.day === d;
       }).map(p => {
         const ex = p.exercise || {};
         const ms = ex.metricsSummary || {};
-        const durSec = ex.activeDuration ? parseInt(ex.activeDuration, 10) : null;
+        const durSec = ex.activeDuration ? parseFloat(ex.activeDuration) : null;
         return {
           name: ex.displayName || ex.exerciseType || "Workout",
           minutes: durSec ? Math.round(durSec/60) : null,
