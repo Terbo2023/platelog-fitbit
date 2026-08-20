@@ -125,7 +125,7 @@
     const startZ = date + "T00:00:00Z";
     const endDate = new Date(new Date(date + "T00:00:00Z").getTime() + 24*3600*1000).toISOString().slice(0,10);
     const endZ = endDate + "T00:00:00Z";
-    const res = await fetch("https://health.googleapis.com/v4/users/me/dataTypes/total-calories/dataPoints:rollUp", {
+    const res = await fetch("https://health.googleapis.com/v4/users/me/dataTypes/total-calories/dataPoints:dailyRollUp", {
       method: "POST",
       headers: { Authorization: "Bearer " + access, "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ range: { startTime: startZ, endTime: endZ } })
