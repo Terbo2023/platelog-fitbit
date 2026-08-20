@@ -27,6 +27,7 @@
 </head>
 <body>
   <div class="card">
+    <button id="backBtn" style="width:auto; display:inline-block; background:none; color:var(--muted); border:1px solid var(--line); padding:6px 12px; font-size:12px; margin:0 0 14px;">‹ Back to PlateLog</button>
     <h1>Syncing with Google Health…</h1>
     <p id="statusText">Pulling today's activity.</p>
     <div class="summary" id="summary"></div>
@@ -203,6 +204,7 @@
     document.execCommand("copy");
     document.getElementById("copyBtn").textContent = "Copied!";
   });
+  document.getElementById("backBtn").addEventListener("click", () => { history.back(); });
 
   run();
 </script>
