@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlateLog — Sync</title>
+<style>
+  :root{ --bg:#0a0f0c; --panel:#131b16; --line:#23302a; --text:#eaf3ee; --muted:#8ea79b; --green:#4ade80; --danger:#e0745e; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI",Roboto,sans-serif; padding:24px 16px; }
+  .card{ max-width:480px; margin:0 auto; background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:22px; }
+  h1{ font-size:18px; margin:0 0 10px; }
+  p{ font-size:13px; color:var(--muted); line-height:1.5; }
+  textarea{
+    width:100%; min-height:100px; background:#0a0f0c; border:1px solid var(--line); color:var(--green);
+    border-radius:10px; padding:12px; font-size:12px; font-family:ui-monospace,monospace; margin-top:10px; word-break:break-all;
+  }
+  button{ width:100%; background:var(--green); color:#062412; border:none; border-radius:10px; padding:12px; font-size:14px; font-weight:700; margin-top:12px; cursor:pointer; }
+  .status{ font-size:13px; margin-top:14px; }
+  .status.err{ color:var(--danger); }
+  .status.ok{ color:var(--green); }
+  .summary{ font-size:13px; margin-top:12px; line-height:1.7; }
+  details{ margin-top:14px; }
+  summary{ font-size:11px; color:var(--muted); cursor:pointer; }
+  pre{ font-size:10px; color:var(--muted); white-space:pre-wrap; word-break:break-all; max-height:200px; overflow:auto; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Syncing with Google Health…</h1>
+    <p id="statusText">Pulling today's activity.</p>
+    <div class="summary" id="summary"></div>
+    <div id="result" style="display:none">
+      <p><b>Copy this code</b>, then go back to PlateLog → Fitbit sync → paste the result in.</p>
+      <textarea id="codeBox" readonly></textarea>
+      <button id="copyBtn">Copy code</button>
+    </div>
+    <details>
+      <summary>Debug info (share with me if numbers look wrong)</summary>
+      <pre id="debugBox"></pre>
+    </details>
+  </div>
+
+<script>
+  // Same client identity as the connect page — see chat notes on the tradeoff.
+  const CLIENT_ID = "1030451755072-q60u6jfgk1h4slqh851vt8q1pg3g4o2i.apps.googleusercontent.com";
+  const CLIENT_SECRET = "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";
+
+  const statusEl = document.getElementById("statusText");
+  const summaryEl = document.getElementById("summary");
+  const resultEl = document.getElementById("result");
+  const codeBox = document.getElementById("codeBox");
+  const debugBox = document.getElementById("debugBox");
+  let debugLines = [];
+
+  function setStatus(msg, cls){ statusEl.textContent = msg; statusEl.className = "status " + (cls||""); }
+  function log(x){ debugLines.push(typeof x === "string" ? x : JSON.stringify(x, null, 1)); debugBox.textContent = debugLines.join("\n\n"); }
+
+  // Params arrive via the URL hash so they never hit any server log
+  const hash = new URLSearchParams(window.location.hash.slice(1));
+  let access = hash.get("a");
+  const refresh = hash.get("r");
+  let expiresAt = parseInt(hash.get("e") || "0", 10);
+  const date = hash.get("date"); // YYYY-MM-DD
+
+  async function refreshIfNeeded(){
+    if (access && Date.now() < expiresAt - 60000) return true;
+    if (!refresh){ setStatus("Token expired and no refresh token available — reconnect in PlateLog.", "err"); return false; }
+    try{
+      const res = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ client_id: CLIENT_ID, client_secret: CLIENT_SECRET, refresh_token: refresh, grant_type: "refresh_token" })
+      });
+      const data = await res.json();
+      log({ refreshResponse: data });
+      if (!data.access_token){ setStatus("Couldn't refresh token — reconnect in PlateLog.", "err"); return false; }
+      access = data.access_token;
+      expiresAt = Date.now() + (data.expires_in || 3600) * 1000;
+      return true;
+    }catch(e){ setStatus("Refresh failed: " + e.message, "err"); return false; }
+  }
+
+  function sumDataType(json){
+    // Google Health API data points can come back shaped a couple different ways —
+    // try the common ones and add up whatever numeric value each point carries.
+    let total = 0;
+    const points = json.dataPoints || json.data_points || [];
+    points.forEach(p => {
+      const v = p.value != null ? p.value : p;
+      if (typeof v === "number") total += v;
+      else if (v && typeof v.intVal === "number") total += v.intVal;
+      else if (v && typeof v.fpVal === "number") total += v.fpVal;
+      else if (v && typeof v.doubleValue === "number") total += v.doubleValue;
+      else if (v && typeof v.integerValue === "number") total += v.integerValue;
+    });
+    return { total, count: points.length };
+  }
+
+  async function fetchDataType(type){
+    const startTime = date + "T00:00:00Z";
+    const endTime = date + "T23:59:59Z";
+    const filter = `data_type.interval.start_time >= "${startTime}" AND data_type.interval.end_time <= "${endTime}"`;
+    const url = "https://health.googleapis.com/v4/users/me/dataTypes/" + type + "/dataPoints?" +
+      new URLSearchParams({ filter, page_size: "200" });
+    const res = await fetch(url, { headers: { Authorization: "Bearer " + access, Accept: "application/json" } });
+    const json = await res.json();
+    log({ [type]: json });
+    if (!res.ok) return { error: json.error ? json.error.message : "request failed", raw: json };
+    return json;
+  }
+
+  async function run(){
+    if (!access || !date){ setStatus("Missing data — open this page via the Sync button in PlateLog.", "err"); return; }
+    const ok = await refreshIfNeeded();
+    if (!ok) return;
+
+    setStatus("Fetching steps, calories, and workouts…");
+    const [stepsJson, calJson, exJson] = await Promise.all([
+      fetchDataType("steps"),
+      fetchDataType("totalCalories"),
+      fetchDataType("exercise")
+    ]);
+
+    const steps = stepsJson.error ? 0 : sumDataType(stepsJson).total;
+    const calories = calJson.error ? 0 : Math.round(sumDataType(calJson).total);
+
+    let exercises = [];
+    if (!exJson.error){
+      const points = exJson.dataPoints || exJson.data_points || [];
+      exercises = points.map(p => {
+        const v = p.value || p;
+        return {
+          name: v.activityName || v.exerciseType || v.type || "Workout",
+          minutes: v.durationMinutes || (v.durationMillis ? Math.round(v.durationMillis/60000) : null),
+          kcal: v.calories || v.energyExpended || null
+        };
+      });
+    }
+
+    summaryEl.innerHTML = "Steps: <b>" + steps + "</b><br>Calories burned: <b>" + calories + "</b><br>Workouts found: <b>" + exercises.length + "</b>";
+
+    const payload = { steps, calories, exercises, a: access, r: refresh, e: expiresAt, date };
+    codeBox.value = btoa(JSON.stringify(payload));
+    resultEl.style.display = "block";
+    setStatus("Done.", "ok");
+  }
+
+  document.getElementById("copyBtn").addEventListener("click", () => {
+    codeBox.select();
+    document.execCommand("copy");
+    document.getElementById("copyBtn").textContent = "Copied!";
+  });
+
+  run();
+</script>
+</body>
+</html>

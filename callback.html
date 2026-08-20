@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlateLog — Google Health Connect</title>
+<style>
+  :root{ --bg:#0a0f0c; --panel:#131b16; --line:#23302a; --text:#eaf3ee; --muted:#8ea79b; --green:#4ade80; --danger:#e0745e; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI",Roboto,sans-serif; padding:24px 16px; }
+  .card{ max-width:480px; margin:0 auto; background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:22px; }
+  h1{ font-size:18px; margin:0 0 10px; }
+  p{ font-size:13px; color:var(--muted); line-height:1.5; }
+  textarea{
+    width:100%; min-height:120px; background:#0a0f0c; border:1px solid var(--line); color:var(--green);
+    border-radius:10px; padding:12px; font-size:12px; font-family:ui-monospace,monospace; margin-top:10px; word-break:break-all;
+  }
+  button{ width:100%; background:var(--green); color:#062412; border:none; border-radius:10px; padding:12px; font-size:14px; font-weight:700; margin-top:12px; cursor:pointer; }
+  .status{ font-size:13px; margin-top:14px; }
+  .status.err{ color:var(--danger); }
+  .status.ok{ color:var(--green); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Connecting Google Health…</h1>
+    <p id="statusText">Exchanging your authorization code for a token.</p>
+    <div id="result" style="display:none">
+      <p><b>Copy this code</b>, then go back to PlateLog → Fitbit sync → paste it in.</p>
+      <textarea id="codeBox" readonly></textarea>
+      <button id="copyBtn">Copy code</button>
+    </div>
+  </div>
+
+<script>
+  // ⚠️ These identify this app to Google. Kept here for simplicity — see chat notes on the tradeoff.
+  const CLIENT_ID = "1030451755072-q60u6jfgk1h4slqh851vt8q1pg3g4o2i.apps.googleusercontent.com";
+  const CLIENT_SECRET = "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";
+  const REDIRECT_URI = "https://terbo2023.github.io/platelog-fitbit/callback.html";
+
+  const statusEl = document.getElementById("statusText");
+  const resultEl = document.getElementById("result");
+  const codeBox = document.getElementById("codeBox");
+
+  function setStatus(msg, cls){
+    statusEl.textContent = msg;
+    statusEl.className = "status " + (cls || "");
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get("code");
+  const codeVerifier = params.get("state"); // we smuggled the PKCE verifier through here
+  const error = params.get("error");
+
+  if (error){
+    setStatus("Google returned an error: " + error, "err");
+  } else if (!code || !codeVerifier){
+    setStatus("Missing authorization code — open this page by tapping Connect in PlateLog, not directly.", "err");
+  } else {
+    fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code: code,
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        redirect_uri: REDIRECT_URI,
+        grant_type: "authorization_code",
+        code_verifier: codeVerifier
+      })
+    })
+    .then(r => r.json().then(data => ({ ok: r.ok, data })))
+    .then(({ ok, data }) => {
+      if (!ok || !data.access_token){
+        setStatus("Token exchange failed: " + (data.error_description || data.error || "unknown error"), "err");
+        return;
+      }
+      const payload = {
+        a: data.access_token,
+        r: data.refresh_token || null,
+        e: Date.now() + (data.expires_in || 3600) * 1000
+      };
+      const pairCode = btoa(JSON.stringify(payload));
+      codeBox.value = pairCode;
+      resultEl.style.display = "block";
+      setStatus("Connected. Copy the code below.", "ok");
+    })
+    .catch(err => setStatus("Network error: " + err.message, "err"));
+  }
+
+  document.getElementById("copyBtn").addEventListener("click", () => {
+    codeBox.select();
+    document.execCommand("copy");
+    document.getElementById("copyBtn").textContent = "Copied!";
+  });
+</script>
+</body>
+</html>
