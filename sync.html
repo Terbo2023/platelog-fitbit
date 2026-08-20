@@ -81,31 +81,45 @@
     }catch(e){ setStatus("Refresh failed: " + e.message, "err"); return false; }
   }
 
-  function sumDataType(json){
-    // Google Health API data points can come back shaped a couple different ways —
-    // try the common ones and add up whatever numeric value each point carries.
+  function extractNumber(obj, candidates){
+    for (const k of candidates){
+      if (obj[k] !== undefined && obj[k] !== null){
+        const v = obj[k];
+        const n = typeof v === "object" ? NaN : parseFloat(v);
+        if (!isNaN(n)) return n;
+      }
+    }
+    return 0;
+  }
+
+  function sumDataType(json, leafKey){
     let total = 0;
-    const points = json.dataPoints || json.data_points || [];
+    const points = json.dataPoints || [];
     points.forEach(p => {
-      const v = p.value != null ? p.value : p;
-      if (typeof v === "number") total += v;
-      else if (v && typeof v.intVal === "number") total += v.intVal;
-      else if (v && typeof v.fpVal === "number") total += v.fpVal;
-      else if (v && typeof v.doubleValue === "number") total += v.doubleValue;
-      else if (v && typeof v.integerValue === "number") total += v.integerValue;
+      const obj = p[leafKey];
+      if (!obj) return;
+      total += extractNumber(obj, ["count","value","kcal","energyKcal","calories","intVal","fpVal","doubleValue","integerValue"]);
     });
     return { total, count: points.length };
   }
 
-  async function fetchDataType(type){
-    const startTime = date + "T00:00:00Z";
-    const endTime = date + "T23:59:59Z";
-    const filter = `data_type.interval.start_time >= "${startTime}" AND data_type.interval.end_time <= "${endTime}"`;
-    const url = "https://health.googleapis.com/v4/users/me/dataTypes/" + type + "/dataPoints?" +
+  const DATA_TYPES = {
+    steps:     { id: "steps",          field: "steps",          leafKey: "steps" },
+    calories:  { id: "total-calories", field: "total_calories", leafKey: "totalCalories" },
+    exercise:  { id: "exercise",       field: "exercise",       leafKey: "exercise" }
+  };
+
+  async function fetchDataType(typeKey){
+    const t = DATA_TYPES[typeKey];
+    const startZ = date + "T00:00:00Z";
+    const endDate = new Date(new Date(date + "T00:00:00Z").getTime() + 24*3600*1000).toISOString().slice(0,10);
+    const endZ = endDate + "T00:00:00Z";
+    const filter = `${t.field}.interval.start_time >= "${startZ}" AND ${t.field}.interval.start_time < "${endZ}"`;
+    const url = "https://health.googleapis.com/v4/users/me/dataTypes/" + t.id + "/dataPoints?" +
       new URLSearchParams({ filter, page_size: "200" });
     const res = await fetch(url, { headers: { Authorization: "Bearer " + access, Accept: "application/json" } });
     const json = await res.json();
-    log({ [type]: json });
+    log({ [typeKey]: json });
     if (!res.ok) return { error: json.error ? json.error.message : "request failed", raw: json };
     return json;
   }
@@ -118,22 +132,24 @@
     setStatus("Fetching steps, calories, and workouts…");
     const [stepsJson, calJson, exJson] = await Promise.all([
       fetchDataType("steps"),
-      fetchDataType("totalCalories"),
+      fetchDataType("calories"),
       fetchDataType("exercise")
     ]);
 
-    const steps = stepsJson.error ? 0 : sumDataType(stepsJson).total;
-    const calories = calJson.error ? 0 : Math.round(sumDataType(calJson).total);
+    const steps = stepsJson.error ? 0 : Math.round(sumDataType(stepsJson, "steps").total);
+    const calories = calJson.error ? 0 : Math.round(sumDataType(calJson, "totalCalories").total);
 
     let exercises = [];
     if (!exJson.error){
-      const points = exJson.dataPoints || exJson.data_points || [];
+      const points = exJson.dataPoints || [];
       exercises = points.map(p => {
-        const v = p.value || p;
+        const ex = p.exercise || {};
+        const ms = ex.metricsSummary || {};
+        const durSec = ex.activeDuration ? parseInt(ex.activeDuration, 10) : null;
         return {
-          name: v.activityName || v.exerciseType || v.type || "Workout",
-          minutes: v.durationMinutes || (v.durationMillis ? Math.round(v.durationMillis/60000) : null),
-          kcal: v.calories || v.energyExpended || null
+          name: ex.displayName || ex.exerciseType || "Workout",
+          minutes: durSec ? Math.round(durSec/60) : null,
+          kcal: ms.caloriesKcal != null ? Math.round(ms.caloriesKcal) : null
         };
       });
     }
