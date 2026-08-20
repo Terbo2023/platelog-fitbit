@@ -123,13 +123,18 @@
   }
 
   async function fetchCaloriesRollup(){
-    const startZ = date + "T00:00:00Z";
-    const endDate = new Date(new Date(date + "T00:00:00Z").getTime() + 24*3600*1000).toISOString().slice(0,10);
-    const endZ = endDate + "T00:00:00Z";
+    const [y,m,d] = date.split("-").map(Number);
+    const next = new Date(Date.UTC(y, m-1, d+1));
     const res = await fetch("https://health.googleapis.com/v4/users/me/dataTypes/total-calories/dataPoints:dailyRollUp", {
       method: "POST",
       headers: { Authorization: "Bearer " + access, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ range: { startTime: startZ, endTime: endZ } })
+      body: JSON.stringify({
+        range: {
+          civilStartTime: { date: { year: y, month: m, day: d } },
+          civilEndTime: { date: { year: next.getUTCFullYear(), month: next.getUTCMonth()+1, day: next.getUTCDate() } }
+        },
+        windowSizeDays: 1
+      })
     });
     const json = await res.json();
     log({ caloriesRollup: json });
