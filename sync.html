@@ -130,8 +130,8 @@
       headers: { Authorization: "Bearer " + access, "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
         range: {
-          civilStartTime: { date: { year: y, month: m, day: d } },
-          civilEndTime: { date: { year: next.getUTCFullYear(), month: next.getUTCMonth()+1, day: next.getUTCDate() } }
+          start: { date: { year: y, month: m, day: d } },
+          end: { date: { year: next.getUTCFullYear(), month: next.getUTCMonth()+1, day: next.getUTCDate() } }
         },
         windowSizeDays: 1
       })
@@ -147,7 +147,7 @@
     const points = json.rollupDataPoints || json.dataPoints || [];
     points.forEach(p => {
       const obj = p.totalCalories || p.value || p;
-      total += extractNumber(obj, ["kcal","count","value","energyKcal","calories"]);
+      total += extractNumber(obj, ["kcal","kcalSum","caloriesSum","totalCaloriesSum","sum","count","value","energyKcal","calories"]);
     });
     return total;
   }
