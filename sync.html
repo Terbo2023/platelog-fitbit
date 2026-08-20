@@ -92,34 +92,66 @@
     return 0;
   }
 
-  function sumDataType(json, leafKey){
-    let total = 0;
+  function sumSteps(json){
+    // Only count Fitbit-sourced points — the phone's own Health Kit tracking
+    // reports steps for the same minutes and would double the total otherwise.
+    let total = 0, count = 0;
     const points = json.dataPoints || [];
     points.forEach(p => {
-      const obj = p[leafKey];
-      if (!obj) return;
-      total += extractNumber(obj, ["count","value","kcal","energyKcal","calories","intVal","fpVal","doubleValue","integerValue"]);
+      const platform = p.dataSource && p.dataSource.platform;
+      if (platform !== "FITBIT") return;
+      if (!p.steps) return;
+      total += extractNumber(p.steps, ["count","value","intVal"]);
+      count++;
     });
-    return { total, count: points.length };
+    return { total, count };
   }
 
-  const DATA_TYPES = {
-    steps:     { id: "steps",          field: "steps",          leafKey: "steps" },
-    calories:  { id: "total-calories", field: "total_calories", leafKey: "totalCalories" },
-    exercise:  { id: "exercise",       field: "exercise",       leafKey: "exercise" }
-  };
-
-  async function fetchDataType(typeKey){
-    const t = DATA_TYPES[typeKey];
+  async function fetchSteps(){
     const startZ = date + "T00:00:00Z";
     const endDate = new Date(new Date(date + "T00:00:00Z").getTime() + 24*3600*1000).toISOString().slice(0,10);
     const endZ = endDate + "T00:00:00Z";
-    const filter = `${t.field}.interval.start_time >= "${startZ}" AND ${t.field}.interval.start_time < "${endZ}"`;
-    const url = "https://health.googleapis.com/v4/users/me/dataTypes/" + t.id + "/dataPoints?" +
-      new URLSearchParams({ filter, page_size: "200" });
+    const filter = `steps.interval.start_time >= "${startZ}" AND steps.interval.start_time < "${endZ}"`;
+    const url = "https://health.googleapis.com/v4/users/me/dataTypes/steps/dataPoints?" +
+      new URLSearchParams({ filter, page_size: "500" });
     const res = await fetch(url, { headers: { Authorization: "Bearer " + access, Accept: "application/json" } });
     const json = await res.json();
-    log({ [typeKey]: json });
+    log({ steps: json });
+    if (!res.ok) return { error: json.error ? json.error.message : "request failed", raw: json };
+    return json;
+  }
+
+  async function fetchCaloriesRollup(){
+    const startZ = date + "T00:00:00Z";
+    const endDate = new Date(new Date(date + "T00:00:00Z").getTime() + 24*3600*1000).toISOString().slice(0,10);
+    const endZ = endDate + "T00:00:00Z";
+    const res = await fetch("https://health.googleapis.com/v4/users/me/dataTypes/total-calories/dataPoints:rollUp", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + access, "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ range: { startTime: startZ, endTime: endZ } })
+    });
+    const json = await res.json();
+    log({ caloriesRollup: json });
+    if (!res.ok) return { error: json.error ? json.error.message : "request failed", raw: json };
+    return json;
+  }
+
+  function sumCaloriesRollup(json){
+    let total = 0;
+    const points = json.rollupDataPoints || json.dataPoints || [];
+    points.forEach(p => {
+      const obj = p.totalCalories || p.value || p;
+      total += extractNumber(obj, ["kcal","count","value","energyKcal","calories"]);
+    });
+    return total;
+  }
+
+  async function fetchExerciseUnfiltered(){
+    const url = "https://health.googleapis.com/v4/users/me/dataTypes/exercise/dataPoints?" +
+      new URLSearchParams({ page_size: "50" });
+    const res = await fetch(url, { headers: { Authorization: "Bearer " + access, Accept: "application/json" } });
+    const json = await res.json();
+    log({ exercise: json });
     if (!res.ok) return { error: json.error ? json.error.message : "request failed", raw: json };
     return json;
   }
@@ -131,18 +163,22 @@
 
     setStatus("Fetching steps, calories, and workouts…");
     const [stepsJson, calJson, exJson] = await Promise.all([
-      fetchDataType("steps"),
-      fetchDataType("calories"),
-      fetchDataType("exercise")
+      fetchSteps(),
+      fetchCaloriesRollup(),
+      fetchExerciseUnfiltered()
     ]);
 
-    const steps = stepsJson.error ? 0 : Math.round(sumDataType(stepsJson, "steps").total);
-    const calories = calJson.error ? 0 : Math.round(sumDataType(calJson, "totalCalories").total);
+    const steps = stepsJson.error ? 0 : Math.round(sumSteps(stepsJson).total);
+    const calories = calJson.error ? 0 : Math.round(sumCaloriesRollup(calJson));
 
     let exercises = [];
     if (!exJson.error){
       const points = exJson.dataPoints || [];
-      exercises = points.map(p => {
+      const [y,m,d] = date.split("-").map(Number);
+      exercises = points.filter(p => {
+        const civ = p.exercise && p.exercise.interval && p.exercise.interval.civilStartTime && p.exercise.interval.civilStartTime.date;
+        return civ && civ.year === y && civ.month === m && civ.day === d;
+      }).map(p => {
         const ex = p.exercise || {};
         const ms = ex.metricsSummary || {};
         const durSec = ex.activeDuration ? parseInt(ex.activeDuration, 10) : null;
